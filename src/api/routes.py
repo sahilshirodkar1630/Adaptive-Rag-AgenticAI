@@ -49,6 +49,7 @@ async def upload_file(
     """
     Upload a document for RAG processing.
 
+    
     Args:
         file: The file to upload (PDF or TXT).
         description: Document description provided via header.
