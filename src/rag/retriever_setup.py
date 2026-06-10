@@ -8,11 +8,24 @@ from langchain_core.documents import Document
 from langchain_core.tools import create_retriever_tool
 from langchain_openai import OpenAIEmbeddings
 # from langchain_qdrant import QdrantVectorStore
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+
+from langchain.agents import create_react_agent, AgentExecutor
+from src.config.settings import Config
+from src.llms.groq import llm
+from langchain_core.prompts import ChatPromptTemplate
 
 from src.core.config import settings
 
-embeddings = OpenAIEmbeddings()
+# embeddings = OpenAIEmbeddings()
+#embeddings = OpenAIEmbeddings(model="text-embedding-ada-002")
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_kwargs={"device": "cpu"},
+    encode_kwargs={"normalize_embeddings": True},
+)
 
 # Global variable to store the FAISS vectorstore instance
 # This ensures get_retriever() can access documents stored by retriever_chain()
@@ -121,3 +134,21 @@ def get_retriever():
     except Exception as e:
         print(f"Error initializing retriever: {e}")
         raise Exception(e)
+
+
+# retriever_setup.py
+
+def get_raw_retriever():
+    """Returns a raw retriever for direct use, not wrapped as a tool."""
+    global _faiss_vectorstore
+
+    if _faiss_vectorstore is not None:
+        return _faiss_vectorstore.as_retriever()
+    
+    # No documents uploaded yet — return dummy
+    dummy_doc = Document(
+        page_content="No documents uploaded yet.",
+        metadata={"source": "initialization"}
+    )
+    dummy_store = FAISS.from_documents([dummy_doc], embeddings)
+    return dummy_store.as_retriever()

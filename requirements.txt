@@ -3,6 +3,8 @@ langgraph~=0.5.4
 langchain_community~=0.3.27
 langchain_core~=0.3.72
 langchain_groq
+langchain_huggingface
+sentence_transformers
 langchain_openai~=0.3.28
 faiss-cpu
 tavily-python
@@ -21,3 +23,4 @@ streamlit
 requests
 langchain-qdrant
 python-multipart
+pypdf
