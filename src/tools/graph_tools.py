@@ -7,7 +7,7 @@ from typing import Literal
 from langchain_core.prompts import PromptTemplate
 
 from src.config.settings import Config
-from src.llms.openai import llm
+from src.llms.groq import llm
 from src.models.state import State
 from src.models.verification_result import VerificationResult
 
@@ -43,9 +43,14 @@ def doc_tool(state: State) -> Literal["rewrite", "generate"]:
         The next node: "generate" if score is "yes", otherwise "rewrite".
     """
     score = state["binary_score"]
-    print(f"[doc_tool] Routing based on score: {score}")
+    rewrite_count = state.get("rewrite_count", 0)
+    print(f"[doc_tool] score={score}, rewrite_count={rewrite_count}")
     if score == "yes":
         return "generate"
+    elif rewrite_count >= 3:
+        # Retrieval failed after 2 rewrites — fall back to web search
+        print("[doc_tool] Rewrite limit reached, falling back to web_search")
+        return "web_search"
     else:
         return "rewrite"
 
