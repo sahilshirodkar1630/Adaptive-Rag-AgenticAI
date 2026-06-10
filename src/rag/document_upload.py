@@ -54,9 +54,12 @@ def documents(description: str, file: UploadFile = File(...)):
         loader = TextLoader(tmp_path, encoding="utf-8")
 
     try:
+        print("STEP 1: File type validated")
         docs = loader.load()
+        print("STEP 2: PDF loaded")
     except Exception as e:
         from fastapi import HTTPException
+        print("PDF LOAD ERROR:", repr(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error loading file: {e}"
@@ -66,6 +69,7 @@ def documents(description: str, file: UploadFile = File(...)):
 
     # Enhance description using LLM
     description_llm = enhance_description_with_llm(description)
+    print("STEP 3: Description enhanced")
 
     # Save enhanced description
     with open("description.txt", "w", encoding="utf-8") as f:
@@ -81,8 +85,12 @@ def documents(description: str, file: UploadFile = File(...)):
         chunk_overlap=150
     )
     chunks = splitter.split_documents(docs)
+    print("STEP 4: Chunks created", len(chunks))
 
-    return retriever_chain(chunks)
+    results = retriever_chain(chunks)
+    print("STEP 5: Retriever chain completed")
+
+    return results
 
 
 

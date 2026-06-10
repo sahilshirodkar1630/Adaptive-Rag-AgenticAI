@@ -5,17 +5,19 @@ Graph builder module for the adaptive RAG system.
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents import create_react_agent, AgentExecutor
 from langgraph.constants import START, END
 from langgraph.graph.state import StateGraph
 
-from src.rag.reAct_agent import agent_executor
 from src.rag.retriever_setup import get_retriever
 from src.config.settings import Config
-from src.llms.openai import llm
+from src.llms.groq import llm
 from src.models.grade import Grade
 from src.models.route_identifier import RouteIdentifier
 from src.models.state import State
 from src.tools.graph_tools import routing_tool, doc_tool
+from src.rag.retriever_setup import get_raw_retriever
 
 config = Config()
 
@@ -32,7 +34,7 @@ def query_classifier(state: State):
         dict: Updated state with route and latest_query.
     """
     question = state["messages"][-1].content
-    retriever = get_retriever()
+    retriever = get_raw_retriever() 
     context = retriever.invoke(question)
     print("docs received from Qdrant")
     print(context)
@@ -76,6 +78,28 @@ def retriever_node(state: State):
     Returns:
         dict: Updated messages with tool calls.
     """
+
+    config = Config()
+
+    # Build fresh retriever tool — picks up current _faiss_vectorstore
+    fresh_tools = [get_retriever()]
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", config.prompt("system_prompt")),
+        ("human", "{input}"),
+        ("ai", "{agent_scratchpad}")
+    ])
+
+    react_agent = create_react_agent(llm, fresh_tools, prompt)
+    agent_executor = AgentExecutor(
+        agent=react_agent,
+        tools=fresh_tools,
+        handle_parsing_errors=True,
+        max_iterations=2,
+        verbose=True,
+        return_intermediate_steps=True
+    )
+
     messages = state["latest_query"]
     result = agent_executor.invoke({"input": messages})
 
@@ -135,6 +159,7 @@ def rewrite_query(state: State):
     Returns:
         dict: Updated latest_query.
     """
+    count = state.get("rewrite_count", 0)
     query = state["latest_query"]
     rewrite_prompt = PromptTemplate(
         template=config.prompt("rewrite_prompt"),
@@ -145,7 +170,8 @@ def rewrite_query(state: State):
     print(result)
 
     return {
-        "latest_query": result.content
+        "latest_query": result.content,
+        "rewrite_count": count + 1
     }
 
 
