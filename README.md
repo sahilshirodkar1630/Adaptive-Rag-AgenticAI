@@ -22,8 +22,11 @@ Built with a **two-level agentic architecture**: LangGraph orchestrates the macr
 ### 🧭 Intelligent Query Routing
 Every query is classified before processing. The system retrieves speculative context from the vector store and asks the LLM: *"Is this context relevant enough to answer this question?"* Based on the answer, the query is routed to one of three pipelines — indexed retrieval, general LLM, or web search — ensuring the most accurate and efficient response path every time.
 
-### 🔍 Advanced RAG Pipeline
-The retrieval pipeline goes beyond simple fetch-and-generate. Retrieved context is graded for relevance. If the context scores poorly, the query is automatically rewritten and retrieval is retried. After two failed rewrites, the system falls back to web search rather than generating a poor answer. This grading → rewrite → retry loop ensures answer quality over raw speed.
+### 🔍 Advanced RAG Pipeline (Adaptive + Corrective)
+The retrieval pipeline goes beyond simple fetch-and-generate. Retrieved context is graded for relevance. If the context scores poorly, the query is automatically rewritten and retrieval is retried. After the rewrite budget is exhausted, the system falls back to web search rather than generating a poor answer. This grading → rewrite → retry loop ensures answer quality over raw speed.
+
+### ✅ Self-Verification (Faithfulness Checking)
+Once an answer is generated, a verification step checks whether it's actually grounded in the retrieved context — allowing faithful summarization, paraphrase, or reasonable inference, but flagging fabricated facts. If the answer isn't verified as faithful, the graph regenerates, up to a bounded retry limit, before returning the best available answer.
 
 ### 🤖 Agentic AI Architecture
 The system uses a **two-level agentic design**. At the macro level, LangGraph manages the overall workflow with conditional branching and stateful execution. At the micro level, a ReAct (Reasoning + Acting) agent operates within the retrieval node — reasoning about how to query the tool, interpreting results, and self-correcting within a bounded iteration limit.
@@ -44,66 +47,75 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         User Interface                          │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │              Streamlit Web Application                   │  │
-│  │   • Chat Interface        • Session Management           │  │
-│  │   • Document Upload       • Name-based Identity          │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              Streamlit Web Application                   │   │
+│  │   • Chat Interface        • Session Management           │   │
+│  │   • Document Upload       • Name-based Identity          │   │
+│  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │  HTTP (REST)
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        FastAPI Backend                          │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  POST /rag/query            POST /rag/documents/upload   │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  POST /rag/query            POST /rag/documents/upload   │   │
+│  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    LangGraph Orchestration                      │
 │                                                                 │
-│   ┌───────────────┐     ┌──────────────────────────────────┐   │
-│   │ query_analysis│────▶│  routing_tool()                  │   │
-│   │               │     │  "index" / "general" / "search"  │   │
-│   └───────────────┘     └──────────┬───────────┬───────────┘   │
-│                                    │           │               │
-│              ┌─────────────────────┤           │               │
-│              │                     │           │               │
-│              ▼                     ▼           ▼               │
-│       ┌────────────┐        ┌──────────┐  ┌──────────┐        │
-│       │  retriever │        │general   │  │web_search│        │
-│       │ (ReAct     │        │_llm      │  │(Tavily)  │        │
-│       │  Agent)    │        └────┬─────┘  └────┬─────┘        │
-│       └─────┬──────┘             │             │              │
-│             │                    ▼             ▼              │
-│             ▼              ┌─────────────────────────┐        │
-│          ┌──────┐          │        generate          │        │
-│          │grade │          │  (synthesize answer)     │        │
-│          └──┬───┘          └─────────────┬───────────┘        │
-│             │                            │                    │
-│     ┌───────┴────────┐                   │                    │
-│     │ doc_tool()     │                   │                    │
-│     │ yes / no       │                   │                    │
-│     └───────┬────────┘                   │                    │
-│             │                            │                    │
-│    ┌────────┴──────┐                     │                    │
-│    ▼               ▼                     │                    │
-│ ┌──────┐      ┌────────┐                 │                    │
-│ │genera│      │rewrite │──(retry)──▶ retriever               │
-│ │  te  │      │(max 2x)│──(fallback)▶ web_search             │
-│ └──┬───┘      └────────┘                 │                    │
-│    └────────────────────────────────┬────┘                    │
-│                                     ▼                         │
-│                                    END                         │
+│   ┌───────────────┐     ┌──────────────────────────────────┐    │
+│   │ query_analysis│───▶ │  routing_tool()                  │   │
+│   │               │     │  "index" / "general" / "search"  │    │
+│   └───────────────┘     └──────────┬───────────┬───────────┘    │
+│                                    │           │                │
+│              ┌─────────────────────┤           │                │
+│              │                     │           │                │
+│              ▼                     ▼           ▼                │
+│       ┌────────────┐        ┌──────────┐  ┌──────────┐          │
+│       │  retriever │        │general   │  │web_search│          │
+│       │ (ReAct     │        │_llm      │  │(Tavily)  │          │
+│       │  Agent)    │        └────┬─────┘  └────┬─────┘          │
+│       └─────┬──────┘             │             │                │
+│             │                    │             │                │
+│             ▼                    │             │                │
+│          ┌──────┐                │             │                │
+│          │grade │                │             │                │
+│          └──┬───┘                │             │                │
+│             │                    │             │                │
+│     ┌───────┴────────┐           │             │                │
+│     │ doc_tool()     │           │             │                │
+│     │ yes / no       │           │             │                │
+│     └───────┬────────┘           │             │                │
+│             │                    │             │                │
+│    ┌────────┴──────┐             │             │                │
+│    ▼               ▼             │             │                │
+│ ┌──────┐      ┌────────┐         │             │                │
+│ │genera│      │rewrite │──(retry, <3)──▶ retriever              │
+│ │  te  │      │        │──(fallback, ≥3)──▶ web_search          │
+│ └──┬───┘      └────────┘                       │                │
+│    │                                           │                │
+│    ▼◀──────────────────────────────────────────┘                │
+│ ┌────────┐                                                      │
+│ │generate│◀────────────────────────────────────┐               │
+│ └───┬────┘                                      │               │
+│     ▼                                           │               │
+│ ┌────────┐   not faithful, retries < 2          │               │
+│ │ verify │───────────────────────────────────────┘              │
+│ └───┬────┘                                                      │
+│     │ faithful, or retries ≥ 2                                  │
+│     ▼                                                           │
+│    END                                                          │
 └─────────────────────────────────────────────────────────────────┘
                          │               │
             ┌────────────┘               └───────────────┐
             ▼                                            ▼
 ┌───────────────────┐                       ┌───────────────────────┐
-│   FAISS / Qdrant  │                       │      MongoDB           │
-│   Vector Store    │                       │   Chat History         │
-│   (HuggingFace    │                       │   (per session_id)     │
+│   FAISS / Qdrant  │                       │      MongoDB          │
+│   Vector Store    │                       │   Chat History        │
+│   (HuggingFace    │                       │   (per session_id)    │
 │   Embeddings)     │                       └───────────────────────┘
 └───────────────────┘
 ```
@@ -121,6 +133,9 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 | `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from retrieved context |
 | `web_search` | `graph_builder.py` | `web_search()` | Searches the web via Tavily for real-time or niche information |
 | `general_llm` | `graph_builder.py` | `general_llm()` | Calls the LLM directly for general knowledge and casual conversation |
+| `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from the selected context |
+| `verify` | `graph_builder.py` | `verify_answer()` | Checks whether the generated answer is faithful to its supporting context; increments the verification counter |
+
 
 ### Conditional Edge Functions (`graph_tools.py`)
 
@@ -133,6 +148,11 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 - `score == "yes"` → `generate`
 - `score == "no"` and `rewrite_count < 2` → `rewrite`
 - `score == "no"` and `rewrite_count >= 2` → `web_search` (fallback)
+
+**`route_after_verify(state)`** — reads `state["verified"]` and `state["verify_count"]`:
+- `verified == True` → `__end__`
+- `verified == False` and `verify_count < 2` → `generate` (regenerate and re-verify)
+- `verified == False` and `verify_count >= 2` → `__end__` (return best available answer)
 
 ---
 
@@ -160,24 +180,23 @@ AdaptiveRag/
 │   ├── models/
 │   │   ├── state.py                    # LangGraph State TypedDict
 │   │   ├── query_request.py            # Pydantic: query + session_id
-│   │   ├── grade.py                    # Pydantic: binary_score (yes/no)
-│   │   ├── route_identifier.py         # Pydantic: route classification result
-│   │   └── verification_result.py      # Pydantic: faithful + explanation
+│   │   ├── verification_result.py      # Pydantic: faithful + explanation
+│   │   └── (optional) grade.py / route_identifier.py  # Structured LLM output for grading/routing
 │   ├── rag/
-│   │   ├── graph_builder.py            # All node implementations + graph assembly
+│   │   ├── graph_builder.py            # All node implementations + graph assembly (`builder`)
 │   │   ├── reAct_agent.py              # ReAct agent factory function
 │   │   ├── retriever_setup.py          # FAISS vector store + retriever tools
 │   │   └── document_upload.py          # File validation, chunking, indexing
 │   └── tools/
 │       ├── common_tools.py             # LLM-powered description enhancer
-│       └── graph_tools.py              # routing_tool + doc_tool edge functions
+│       └── graph_tools.py              # routing_tool / doc_tool / route_after_verify edge functions
 │
-├── streamlit_app/
+├── streamlit_app/                      # Optional Streamlit frontend
 │   ├── home.py                         # Name entry + UUID session creation
 │   ├── pages/
 │   │   └── chat.py                     # Chat UI + sidebar document upload
 │   └── utils/
-│       └── api_client.py               # HTTP client for FastAPI backend
+│       └── api_client.py               # HTTP client for the FastAPI backend
 │
 ├── .env                                # API keys — never commit this
 ├── requirements.txt
@@ -185,39 +204,44 @@ AdaptiveRag/
 ```
 
 ---
+---
 
 ## 🧠 Key Design Decisions
 
 ### ReAct Agent Built at Query Time, Not Import Time
-The ReAct agent is created inside a factory function `build_agent_executor()` that is called fresh on every query, not once at module import. This ensures the agent always picks up the current FAISS vector store after document upload. A module-level agent would be frozen with an empty dummy store from server startup.
+The ReAct agent is created inside a factory function (e.g. `build_agent_executor()`) that's called fresh on every query rather than once at module import. This ensures the agent always picks up the current FAISS vector store after a document upload — a module-level agent built at import time would be frozen with the empty dummy store from server startup.
 
 ```python
 # WRONG — frozen at import time, misses documents uploaded later
 tools = [get_retriever()]
 agent_executor = AgentExecutor(tools=tools, ...)
 
-# CORRECT — built fresh per query, always uses current vector store
+# CORRECT — built fresh per query, always uses the current vector store
 def build_agent_executor():
     fresh_tools = [get_retriever()]
     return AgentExecutor(tools=fresh_tools, ...)
 ```
 
 ### Two Separate Retriever Interfaces
-`get_retriever()` returns a LangChain **Tool** (name + description + formatted output) designed for agent use. `get_raw_retriever()` returns a plain retriever producing `List[Document]`. The `query_classifier` uses the raw retriever because it needs actual document objects for classification context — not an agent-formatted string.
+`get_retriever()` returns a LangChain **tool** (name + description + formatted output) for agent use. `get_raw_retriever()` returns a plain retriever producing `List[Document]` objects directly — used by the query classifier, which needs real document objects for classification context rather than an agent-formatted string.
 
-### Rewrite Counter as Loop Guard
-The `grade → rewrite → retriever` loop has no natural exit if retrieval consistently fails. A `rewrite_count` field in `State` caps retries at 2 and falls back to web search, guaranteeing the graph always terminates cleanly rather than hitting LangGraph's recursion limit.
+### Rewrite Counter as a Loop Guard
+The `grade → rewrite → retriever` loop has no natural exit if retrieval keeps failing. A `rewrite_count` field on `State` caps retries at 3 attempts before falling back to web search, guaranteeing the graph terminates cleanly instead of hitting LangGraph's recursion limit.
+
+### Verification Counter as a Second Loop Guard
+Similarly, `verify_count` caps the generate → verify → regenerate loop at 2 attempts. If the answer still isn't verified as faithful after that, the graph returns the best answer produced rather than looping indefinitely.
 
 ### Prompts Fully Externalized in YAML
-All LLM prompt templates live in `prompts.yaml` and are loaded by the `Config` class. No prompt text exists in Python files. Prompt changes never require touching application logic, and prompts can be versioned independently.
+All LLM prompt templates live in `prompts.yaml` and are loaded via the `Config` class. No prompt text lives in Python files, so prompt changes never require touching application logic and prompts can be versioned independently.
 
 ### MongoDB Over In-Memory for Chat History
-Motor (async MongoDB driver) pairs naturally with FastAPI's async model without blocking the event loop. Messages are document-shaped — `session_id`, `type`, `content`, `timestamp`, `additional_kwargs` — requiring no schema migrations as the message format evolves. History survives server restarts and scales across multiple instances, unlike a class-level Python dict.
+Motor (the async MongoDB driver) pairs naturally with FastAPI's async model without blocking the event loop. Messages are stored as documents — `session_id`, `type`, `content`, `timestamp`, `additional_kwargs` — requiring no schema migrations as the message format evolves. History survives restarts and scales across multiple instances, unlike a class-level Python dict.
 
 ### Name-Based Session Identity
-The Streamlit frontend asks for a user's name and generates a UUID as the `session_id`. This UUID is sent with every request and used as the MongoDB partition key. It provides isolated, persistent conversation history per session without formal authentication — sufficient for a RAG demonstration project. Upgrading to verified identity later requires changing only how `session_id` is derived, not the storage layer.
+The Streamlit frontend asks for a name and generates a UUID as the `session_id`, sent with every request and used as the MongoDB partition key. It gives isolated, persistent conversation history per session without formal authentication — sufficient for a demonstration project. Upgrading to verified identity later only requires changing how `session_id` is derived, not the storage layer.
 
 ---
+
 
 ## 🔌 API Endpoints
 
@@ -381,7 +405,7 @@ streamlit run streamlit_app/home.py
 ---
 
 ## 📚 Documentation References
-
+-  CODE_STYLE_GUIDE.md - Comprehensive coding standards
 - [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
 - [LangChain ReAct Agents](https://python.langchain.com/docs/modules/agents/agent_types/react/)
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
@@ -426,23 +450,20 @@ A: Yes. The `llm` instance in `groq.py` follows the LangChain `BaseChatModel` in
 
 ## 📈 Project Status
 
-- ✅ Core adaptive RAG pipeline implemented
+- ✅ Core adaptive RAG pipeline implemented (classify → route → retrieve/search → grade → generate)
 - ✅ Intelligent query routing (index / general / search)
-- ✅ ReAct agentic retrieval with factory pattern fix
+- ✅ Grading + rewrite loop with fallback guard (max 3 rewrites)
+- ✅ Self-verification (faithfulness) loop with fallback guard (max 2 retries)
 - ✅ Document upload, chunking, and FAISS indexing
-- ✅ Grading + rewrite loop with fallback guard
-- ✅ MongoDB persistent chat history
-- ✅ Streamlit web interface with session management
+- ✅ MongoDB persistent chat history + in-memory fallback
 - ✅ All prompts externalized in YAML
-- ✅ Code documented and formatted
-- ⏳ Production deployment (Qdrant, async graph, auth)
+- ⏳ Production deployment hardening (Qdrant migration, fully async graph invocation, auth)
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] Wire in `verify_answer()` faithfulness check as post-generate node
-- [ ] Replace `builder.invoke()` with `builder.ainvoke()` for true async
+
 - [ ] Replace FAISS with Qdrant for persistent multi-document support
 - [ ] Multi-language query and response support
 - [ ] Extended LLM provider support (OpenAI, Anthropic, Mistral)
