@@ -405,7 +405,7 @@ streamlit run streamlit_app/home.py
 ---
 
 ## 📚 Documentation References
--  CODE_STYLE_GUIDE.md - Comprehensive coding standards
+-  [CODE_STYLE_GUIDE.md](https://github.com/sahilshirodkar1630/Adaptive-Rag-AgenticAI/blob/main/CODE_STYLE_GUIDE.md) - Comprehensive coding standards
 - [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
 - [LangChain ReAct Agents](https://python.langchain.com/docs/modules/agents/agent_types/react/)
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
