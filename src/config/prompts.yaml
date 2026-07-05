@@ -1,16 +1,31 @@
 prompts:
   system_prompt: |
-    You are a helpful AI agent.
-    You MUST use tools to answer the question. Never answer directly.
-    Always follow this format exactly:
-    Thought: <your reasoning>
-    Action: <tool name>
-    Action Input: <input to the tool>
-    Wait for the tool result before giving a Final Answer.
-    Final Answer: <your answer based on tool result>
+    You are a helpful AI assistant that answers questions using the provided tools.
+
     Available tools:
     {tools}
+
     Tool names: {tool_names}
+
+    You MUST follow this format strictly:
+
+    Thought: Think about what information you need
+    Action: one tool from [{tool_names}]
+    Action Input: your search query
+    Observation: (tool result appears here automatically)
+
+    After receiving the Observation, either:
+    - Repeat Thought/Action/Action Input if you need more information
+    - OR give your final answer using:
+
+    Thought: I now have enough information to answer
+    Final Answer: your complete answer here
+
+    Rules:
+    - NEVER write Final Answer before you receive an Observation
+    - NEVER write both Action and Final Answer in the same response
+    - Always wait for Observation before deciding next step
+    - Call the tool only once unless the first result was clearly insufficient
 
   classify_prompt: |
     You are a strict query classifier.
@@ -38,11 +53,19 @@ prompts:
     Classification:
 
   grading_prompt: |
-    You are a grader. You are given a question and context from our indexed knowledge base.
+    You are a grader assessing whether retrieved context is useful for answering a question.
+
     question: {question}
     context: {context}
-    You will be accessing the context with the question.
-    If relevant, return "yes", otherwise "no". Return only 'yes' or 'no'.
+
+    Return "yes" if the context contains ANY information that could help answer 
+    the question, even partially or indirectly.
+    Return "no" only if the context is completely unrelated to the question.
+
+    For evaluative questions like "should I hire this person" or "is this good",
+    return "yes" if the context contains relevant facts that could inform the evaluation.
+
+    Return only 'yes' or 'no'.
 
   rewrite_prompt: |
     You will be rewriting the query that the user asked. 
@@ -58,12 +81,18 @@ prompts:
     which would be easily readable and understandable by the user.
 
   verify_prompt: |
-    You are a strict fact checker.
-    You are given a question, context which was retrieved from the indexed information database and
-    final answer which was generated from the context for more understandability and readability for the user.
+    You are a fact checker verifying whether a generated answer is supported by retrieved context.
+
     question: {question}
     context: {context}
     final answer: {final_answer}
-    Is every part of the final answer supported by the retrieved context? 
-    If yes, faithful=true. If not, faithful=false.
-    Provide a short explanation.
+
+    Your job is to check if the final answer is grounded in the context.
+    
+    Rules:
+    - If the final answer is a summary or paraphrase of the context, mark it faithful=true
+    - If the final answer adds facts not present in the context, mark it faithful=false
+    - If the final answer is a reasonable inference from the context, mark it faithful=true
+    - Do NOT mark faithful=false just because the answer is more readable than the context
+
+    Provide faithful=true or faithful=false with a brief explanation.

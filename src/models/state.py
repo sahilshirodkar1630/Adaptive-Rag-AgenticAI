@@ -16,3 +16,6 @@ class State(TypedDict):
     route: Optional[str]
     latest_query: Optional[str]
     rewrite_count: Optional[int]
+    retrieved_context: Optional[str] 
+    verify_count: Optional[int] 
+    verified: Optional[bool]

@@ -24,3 +24,5 @@ requests
 langchain-qdrant
 python-multipart
 pypdf
+pygraphviz
+mermaid-py

@@ -55,7 +55,7 @@ def doc_tool(state: State) -> Literal["rewrite", "generate"]:
         return "rewrite"
 
 
-def verify_answer(state: State) -> Literal["__end__", "generate"]:
+def route_after_verify(state: State) -> Literal["__end__", "generate"]:
     """
     Verify whether the final answer is faithful to the retrieved context.
 
@@ -65,29 +65,11 @@ def verify_answer(state: State) -> Literal["__end__", "generate"]:
     Returns:
         "__end__" if answer is faithful, otherwise "generate" to retry.
     """
-    if state["route"] == "general":
+    if state["verified"]:
         return "__end__"
-
-    question = state["latest_query"]
-    context = state["messages"][-1].content
-    final_answer = state["messages"][-1].content
-
-    verify_prompt = PromptTemplate(
-        template=config.prompt("verify_prompt"),
-        input_variables=["question", "context", "final_answer"]
-    )
-    llm_with_verification = llm.with_structured_output(VerificationResult)
-
-    verify_chain = verify_prompt | llm_with_verification
-
-    result = verify_chain.invoke({
-        "question": question,
-        "context": context,
-        "final_answer": final_answer
-    })
-
-    if result.faithful:
+    elif (state["verify_count"] or 0) >= 2:
+        print("Verify limit reached, returning best answer available.")
         return "__end__"
     else:
-        print("Generating again as answer is not faithful.")
+        print("Answer not faithful, regenerating.")
         return "generate"

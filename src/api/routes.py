@@ -30,7 +30,7 @@ async def rag_query(req: QueryRequest):
 
     # Fetch full history
     messages = await chat_history.get_messages()
-    result = builder.invoke({
+    result = await builder.ainvoke({
         "messages": messages
     })
     output_text = result["messages"][-1].content
