@@ -32,7 +32,7 @@ def routing_tool(state: State) -> Literal["retriever", "general_llm", "web_searc
         return "web_search"
 
 
-def doc_tool(state: State) -> Literal["rewrite", "generate"]:
+def doc_tool(state: State) -> Literal["rewrite", "generate", "web_search"]:
     """
     Determine whether the query needs rewriting based on grading score.
 

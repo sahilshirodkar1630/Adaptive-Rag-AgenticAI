@@ -58,7 +58,8 @@ def query_classifier(state: State):
         "rewrite_count": 0,        # ← add
         "verify_count": 0,         # ← add
         "verified": False,         # ← add
-        "retrieved_context": None  # ← add
+        "retrieved_context": None, # ← add
+        "verify_feedback": None
     }
 
 
@@ -134,12 +135,23 @@ def retriever_node(state: State):
             output = "I was unable to retrieve relevant information. Please try rephrasing your question."
 
     new_message = AIMessage(
-        content=result["output"],
+        content=output,
         additional_kwargs={"tool_calls": tool_calls},
     )
 
+    # Keep the raw chunks the retriever tool returned: this is the source that
+    # grade, generate and verify must all use. Parse-error steps ("_Exception")
+    # are skipped; if the tool was never called, fall back to the agent's answer.
+    retrieved_chunks = [
+        str(tool_result)
+        for action, tool_result in intermediate_steps
+        if action.tool == fresh_tools[0].name
+    ]
+    retrieved_context = "\n\n".join(retrieved_chunks) if retrieved_chunks else output
+
     return {
-        "messages": [new_message]
+        "messages": [new_message],
+        "retrieved_context": retrieved_context
     }
 
 
@@ -157,7 +169,7 @@ def grade(state: State):
         template=config.prompt("grading_prompt"),
         input_variables=["question", "context"]
     )
-    context = state["messages"][-1].content
+    context = state["retrieved_context"]
     question = state["latest_query"]
 
     llm_with_grade = llm.with_structured_output(Grade)
@@ -205,18 +217,31 @@ def generate(state: State):
     Returns:
         dict: Generated response.
     """
-    context = state["messages"][-1].content
+    # Always generate from the stored source, never from the last message:
+    # on a retry the last message is the rejected answer.
+    context = state["retrieved_context"]
+    question = state["latest_query"]
+
+    feedback = ""
+    if state.get("verify_feedback"):
+        feedback = (
+            "Your previous answer was rejected by a fact checker: "
+            f"{state['verify_feedback']} Do not repeat that mistake."
+        )
 
     generate_prompt = PromptTemplate(
         template=config.prompt("generate_prompt"),
-        input_variables=["context"]
+        input_variables=["question", "context", "feedback"]
     )
 
     generate_chain = generate_prompt | llm
-    result = generate_chain.invoke({"context": context})
+    result = generate_chain.invoke({
+        "question": question,
+        "context": context,
+        "feedback": feedback
+    })
 
     return {
-        "retrieved_context": context,
         "verify_count": (state["verify_count"] or 0) + 1,
         "messages": [{"role": "assistant", "content": result.content}]
         }
@@ -241,8 +266,11 @@ def web_search(state: State):
     contents = [item["content"] for item in result if "content" in item]
     print(contents)
 
+    web_context = "\n\n".join(contents)
+
     return {
-        "messages": [{"role": "assistant", "content": "\n\n".join(contents)}]
+        "messages": [{"role": "assistant", "content": web_context}],
+        "retrieved_context": web_context
     }
 
 def verify_answer_node(state: State) -> dict:
@@ -266,7 +294,10 @@ def verify_answer_node(state: State) -> dict:
         "final_answer": final_answer
     })
 
-    return {"verified": result.faithful}   # returns dict ✅
+    return {
+        "verified": result.faithful,
+        "verify_feedback": None if result.faithful else result.explanation
+    }
 
 # Build the graph
 graph = StateGraph(State)

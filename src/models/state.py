@@ -19,3 +19,4 @@ class State(TypedDict):
     retrieved_context: Optional[str] 
     verify_count: Optional[int] 
     verified: Optional[bool]
+    verify_feedback: Optional[str]  # why the verifier rejected the last answer
