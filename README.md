@@ -1,6 +1,6 @@
 # 🤖 Adaptive RAG — Agentic AI Chatbot
 
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Python 3.13+](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Latest-green.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Latest-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Latest-red.svg)](https://streamlit.io/)
@@ -11,7 +11,7 @@
 
 ## 📖 Overview
 
-**Adaptive RAG** is a production-grade, agentic AI chatbot that intelligently adapts its retrieval strategy based on the nature of each user query. Unlike traditional RAG systems that blindly retrieve from a vector store on every request, this system first **classifies the query** and routes it to the most appropriate pipeline — indexed document retrieval, general LLM reasoning, or real-time web search.
+**Adaptive RAG** is an end-to-end, agentic AI chatbot that intelligently adapts its retrieval strategy based on the nature of each user query. Unlike traditional RAG systems that blindly retrieve from a vector store on every request, this system first **classifies the query** and routes it to the most appropriate pipeline — indexed document retrieval, general LLM reasoning, or real-time web search.
 
 Built with a **two-level agentic architecture**: LangGraph orchestrates the macro routing strategy, while a ReAct agent handles micro-level reasoning within the retrieval path. The system maintains persistent multi-turn conversation history per user session via MongoDB, and exposes a clean REST API consumed by a Streamlit web interface.
 
@@ -44,81 +44,21 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         User Interface                          │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Streamlit Web Application                   │   │
-│  │   • Chat Interface        • Session Management           │   │
-│  │   • Document Upload       • Name-based Identity          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │  HTTP (REST)
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        FastAPI Backend                          │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  POST /rag/query            POST /rag/documents/upload   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    LangGraph Orchestration                      │
-│                                                                 │
-│   ┌───────────────┐     ┌──────────────────────────────────┐    │
-│   │ query_analysis│───▶ │  routing_tool()                  │   │
-│   │               │     │  "index" / "general" / "search"  │    │
-│   └───────────────┘     └──────────┬───────────┬───────────┘    │
-│                                    │           │                │
-│              ┌─────────────────────┤           │                │
-│              │                     │           │                │
-│              ▼                     ▼           ▼                │
-│       ┌────────────┐        ┌──────────┐  ┌──────────┐          │
-│       │  retriever │        │general   │  │web_search│          │
-│       │ (ReAct     │        │_llm      │  │(Tavily)  │          │
-│       │  Agent)    │        └────┬─────┘  └────┬─────┘          │
-│       └─────┬──────┘             │             │                │
-│             │                    │             │                │
-│             ▼                    │             │                │
-│          ┌──────┐                │             │                │
-│          │grade │                │             │                │
-│          └──┬───┘                │             │                │
-│             │                    │             │                │
-│     ┌───────┴────────┐           │             │                │
-│     │ doc_tool()     │           │             │                │
-│     │ yes / no       │           │             │                │
-│     └───────┬────────┘           │             │                │
-│             │                    │             │                │
-│    ┌────────┴──────┐             │             │                │
-│    ▼               ▼             │             │                │
-│ ┌──────┐      ┌────────┐         │             │                │
-│ │genera│      │rewrite │──(retry, <3)──▶ retriever              │
-│ │  te  │      │        │──(fallback, ≥3)──▶ web_search          │
-│ └──┬───┘      └────────┘                       │                │
-│    │                                           │                │
-│    ▼◀──────────────────────────────────────────┘                │
-│ ┌────────┐                                                      │
-│ │generate│◀────────────────────────────────────┐               │
-│ └───┬────┘                                      │               │
-│     ▼                                           │               │
-│ ┌────────┐   not faithful, retries < 2          │               │
-│ │ verify │───────────────────────────────────────┘              │
-│ └───┬────┘                                                      │
-│     │ faithful, or retries ≥ 2                                  │
-│     ▼                                                           │
-│    END                                                          │
-└─────────────────────────────────────────────────────────────────┘
-                         │               │
-            ┌────────────┘               └───────────────┐
-            ▼                                            ▼
-┌───────────────────┐                       ┌───────────────────────┐
-│   FAISS / Qdrant  │                       │      MongoDB          │
-│   Vector Store    │                       │   Chat History        │
-│   (HuggingFace    │                       │   (per session_id)    │
-│   Embeddings)     │                       └───────────────────────┘
-└───────────────────┘
-```
+### Graph flow
+
+<p align="center">
+  <img src="docs/graph_flow.png" alt="Adaptive RAG LangGraph flow: query_analysis routes to retriever, web_search or general_llm; grade and rewrite loop; generate and verify loop" width="670">
+</p>
+
+`query_analysis` first pulls the top 4 chunks from FAISS, then the LLM picks a route. Document questions go through **retriever → grade**, with up to 3 query rewrites before falling back to web search. Every retrieved or searched answer is checked by **verify** and regenerated once if it is not grounded.
+
+### System overview
+
+<p align="center">
+  <img src="docs/system_overview.png" alt="System overview: Streamlit UI calls the FastAPI backend; the query endpoint loads and saves history in MongoDB and runs the LangGraph agent, which calls Groq, Tavily and FAISS; the upload endpoint runs ingestion into FAISS" width="730">
+</p>
+
+The Streamlit UI talks to FastAPI over REST. **`/rag/query`** loads the session's history from MongoDB, runs the LangGraph agent and saves the new turn. **`/rag/documents/upload`** loads and chunks the file, embeds it with all-MiniLM-L6-v2 and adds it to FAISS. Dashed boxes are external services and stores.
 
 ---
 
@@ -130,11 +70,10 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 | `retriever` | `graph_builder.py` | `retriever_node()` | Builds a fresh ReAct agent at query time and invokes it with the retriever tool |
 | `grade` | `graph_builder.py` | `grade()` | Scores retrieved context for relevance — returns `"yes"` or `"no"` |
 | `rewrite` | `graph_builder.py` | `rewrite_query()` | Rewrites the query for better vector search, increments rewrite counter |
-| `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from retrieved context |
 | `web_search` | `graph_builder.py` | `web_search()` | Searches the web via Tavily for real-time or niche information |
 | `general_llm` | `graph_builder.py` | `general_llm()` | Calls the LLM directly for general knowledge and casual conversation |
-| `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from the selected context |
-| `verify` | `graph_builder.py` | `verify_answer()` | Checks whether the generated answer is faithful to its supporting context; increments the verification counter |
+| `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from the retrieved or web-search context |
+| `verify` | `graph_builder.py` | `verify_answer_node()` | Checks whether the generated answer is faithful to its supporting context; increments the verification counter |
 
 
 ### Conditional Edge Functions (`graph_tools.py`)
@@ -146,8 +85,8 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 
 **`doc_tool(state)`** — reads `state["binary_score"]` and `state["rewrite_count"]`:
 - `score == "yes"` → `generate`
-- `score == "no"` and `rewrite_count < 2` → `rewrite`
-- `score == "no"` and `rewrite_count >= 2` → `web_search` (fallback)
+- `score == "no"` and `rewrite_count < 3` → `rewrite`
+- `score == "no"` and `rewrite_count >= 3` → `web_search` (fallback)
 
 **`route_after_verify(state)`** — reads `state["verified"]` and `state["verify_count"]`:
 - `verified == True` → `__end__`
@@ -159,7 +98,7 @@ A Streamlit web application provides a chat interface, sidebar document upload w
 ## 📁 Project Structure
 
 ```
-AdaptiveRag/
+adaptive-rag-agenticai/
 ├── src/
 │   ├── main.py                         # FastAPI app entry point
 │   ├── api/
@@ -173,7 +112,8 @@ AdaptiveRag/
 │   ├── db/
 │   │   └── mongo_client.py             # Async MongoDB client via Motor
 │   ├── llms/
-│   │   └── groq.py                     # ChatGroq — LLaMA 3.3 70B instance
+│   │   ├── groq.py                     # ChatGroq — LLaMA 3.3 70B instance
+│   │   └── openai.py                   # ChatOpenAI (gpt-4o) — alternative LLM
 │   ├── memory/
 │   │   ├── chat_history_mongo.py       # Persistent MongoDB chat history
 │   │   └── chathistory_in_memory.py    # In-memory fallback (dev only)
@@ -181,10 +121,10 @@ AdaptiveRag/
 │   │   ├── state.py                    # LangGraph State TypedDict
 │   │   ├── query_request.py            # Pydantic: query + session_id
 │   │   ├── verification_result.py      # Pydantic: faithful + explanation
-│   │   └── (optional) grade.py / route_identifier.py  # Structured LLM output for grading/routing
+│   │   ├── grade.py                    # Pydantic: relevance score (structured output)
+│   │   └── route_identifier.py         # Pydantic: route (structured output)
 │   ├── rag/
-│   │   ├── graph_builder.py            # All node implementations + graph assembly (`builder`)
-│   │   ├── reAct_agent.py              # ReAct agent factory function
+│   │   ├── graph_builder.py            # All nodes (incl. the ReAct agent) + graph assembly (`builder`)
 │   │   ├── retriever_setup.py          # FAISS vector store + retriever tools
 │   │   └── document_upload.py          # File validation, chunking, indexing
 │   └── tools/
@@ -199,6 +139,7 @@ AdaptiveRag/
 │       └── api_client.py               # HTTP client for the FastAPI backend
 │
 ├── .env                                # API keys — never commit this
+├── pyproject.toml / uv.lock
 ├── requirements.txt
 └── README.md
 ```
@@ -209,17 +150,17 @@ AdaptiveRag/
 ## 🧠 Key Design Decisions
 
 ### ReAct Agent Built at Query Time, Not Import Time
-The ReAct agent is created inside a factory function (e.g. `build_agent_executor()`) that's called fresh on every query rather than once at module import. This ensures the agent always picks up the current FAISS vector store after a document upload — a module-level agent built at import time would be frozen with the empty dummy store from server startup.
+The ReAct agent and its `AgentExecutor` are created inside `retriever_node` on every query rather than once at module import. This ensures the agent always picks up the current FAISS vector store after a document upload — a module-level agent built at import time would be frozen with the empty dummy store from server startup.
 
 ```python
 # WRONG — frozen at import time, misses documents uploaded later
 tools = [get_retriever()]
 agent_executor = AgentExecutor(tools=tools, ...)
 
-# CORRECT — built fresh per query, always uses the current vector store
-def build_agent_executor():
+# CORRECT — built fresh per query inside retriever_node, always uses the current vector store
+def retriever_node(state):
     fresh_tools = [get_retriever()]
-    return AgentExecutor(tools=fresh_tools, ...)
+    agent_executor = AgentExecutor(tools=fresh_tools, max_iterations=3, ...)
 ```
 
 ### Two Separate Retriever Interfaces
@@ -294,7 +235,7 @@ The description is enhanced by the LLM into a retriever tool instruction before 
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.13+
 - Docker Desktop (for MongoDB)
 - [Groq API key](https://console.groq.com) — free tier available
 - [Tavily API key](https://tavily.com) — free tier available
@@ -305,8 +246,8 @@ The description is enhanced by the LLM into a retriever tool instruction before 
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/Adaptive-Rag.git
-cd Adaptive-Rag
+git clone https://github.com/sahilshirodkar1630/adaptive-rag-agenticai.git
+cd adaptive-rag-agenticai
 
 # 2. Create and activate virtual environment
 python -m venv venv
@@ -337,11 +278,9 @@ TAVILY_API_KEY=your_tavily_api_key_here
 # Database
 MONGO_URL=mongodb://localhost:27017
 
-# Vector Store (Qdrant — for production use)
-QDRANT_URL=your_qdrant_cluster_url
-QDRANT_API_KEY=your_qdrant_api_key
-QDRANT_CODE_COLLECTION=codebase
-QDRANT_DOCS_COLLECTION=guidelines
+# Optional — Qdrant (not used yet; FAISS is the active vector store)
+# QDRANT_URL=your_qdrant_cluster_url
+# QDRANT_API_KEY=your_qdrant_api_key
 ```
 
 > ⚠️ Never commit `.env` to version control. Add it to `.gitignore`.
@@ -397,10 +336,10 @@ streamlit run streamlit_app/home.py
 ## ⚡ Performance Considerations
 
 - **Embedding model runs on CPU** — `all-MiniLM-L6-v2` is 80MB and produces 384-dimensional vectors. It's fast enough for local use. For production, switch to GPU inference or a hosted embeddings API.
-- **ReAct agent is capped at 2 iterations** — `max_iterations=2` in `AgentExecutor` prevents runaway tool calls and keeps latency predictable.
-- **Rewrite loop capped at 2 retries** — `rewrite_count >= 2` falls back to web search rather than looping indefinitely.
+- **ReAct agent is capped at 3 iterations** — `max_iterations=3` in `AgentExecutor` prevents runaway tool calls and keeps latency predictable.
+- **Rewrite loop capped at 3 retries** — `rewrite_count >= 3` falls back to web search rather than looping indefinitely.
 - **FAISS is in-memory** — vector store resets on server restart. Switch to Qdrant (already stubbed in `retriever_setup.py`) for persistent, production-grade storage.
-- **`builder.invoke()` is synchronous** — blocks the FastAPI event loop under concurrent load. Production upgrade: replace with `await builder.ainvoke()`.
+- **Graph runs with `await builder.ainvoke()`** — the endpoint doesn't block FastAPI's event loop; LangGraph runs the synchronous node functions in a thread pool.
 
 ---
 
@@ -430,7 +369,7 @@ A: Yes — as long as the same session UUID is sent with each request, MongoDB r
 A: The new document replaces the existing FAISS vector store. The current implementation supports one active document collection at a time. For multi-document support, switch to Qdrant with named collections.
 
 **Q: Why does the system sometimes route to web search even for document questions?**
-A: After two failed rewrite attempts, the grader still returns `"no"` (retrieved context is not relevant), and the system falls back to web search rather than generating a low-quality answer. This is intentional — a web answer is better than a hallucinated one.
+A: After three failed rewrite attempts, the grader still returns `"no"` (retrieved context is not relevant), and the system falls back to web search rather than generating a low-quality answer. This is intentional — a web answer is better than a hallucinated one.
 
 **Q: Can the LLM be swapped out?**
 A: Yes. The `llm` instance in `groq.py` follows the LangChain `BaseChatModel` interface. Any LangChain-compatible LLM (OpenAI, Anthropic, Mistral) can be substituted by changing the single `llm` import used across all nodes.
@@ -457,7 +396,7 @@ A: Yes. The `llm` instance in `groq.py` follows the LangChain `BaseChatModel` in
 - ✅ Document upload, chunking, and FAISS indexing
 - ✅ MongoDB persistent chat history + in-memory fallback
 - ✅ All prompts externalized in YAML
-- ⏳ Production deployment hardening (Qdrant migration, fully async graph invocation, auth)
+- ⏳ Production deployment hardening (Qdrant migration, auth)
 
 ---
 
