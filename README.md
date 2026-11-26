@@ -26,13 +26,13 @@ Every query is classified before processing. The system retrieves speculative co
 The retrieval pipeline goes beyond simple fetch-and-generate. Retrieved context is graded for relevance. If the context scores poorly, the query is automatically rewritten and retrieval is retried. After the rewrite budget is exhausted, the system falls back to web search rather than generating a poor answer. This grading → rewrite → retry loop ensures answer quality over raw speed.
 
 ### ✅ Self-Verification (Faithfulness Checking)
-Once an answer is generated, a verification step checks whether it's actually grounded in the retrieved context — allowing faithful summarization, paraphrase, or reasonable inference, but flagging fabricated facts. If the answer isn't verified as faithful, the graph regenerates, up to a bounded retry limit, before returning the best available answer.
+Once an answer is generated, a verification step checks whether it's actually grounded in the retrieved context — allowing faithful summarization, paraphrase, or reasonable inference, but flagging fabricated facts. If the answer isn't verified as faithful, the verifier's explanation is fed back and the answer is regenerated from the original retrieved source, up to a bounded retry limit, before returning the best available answer.
 
 ### 🤖 Agentic AI Architecture
 The system uses a **two-level agentic design**. At the macro level, LangGraph manages the overall workflow with conditional branching and stateful execution. At the micro level, a ReAct (Reasoning + Acting) agent operates within the retrieval node — reasoning about how to query the tool, interpreting results, and self-correcting within a bounded iteration limit.
 
 ### 🧠 State Management
-All graph nodes share a single typed `State` object that flows through the entire LangGraph execution. State fields include the full conversation message list, the current route, the relevance score, the latest query string, and a rewrite counter. The `add_messages` annotation ensures message history is appended rather than overwritten across nodes.
+All graph nodes share a single typed `State` object that flows through the entire LangGraph execution. State fields include the full conversation message list, the current route, the relevance score, the latest query string, the rewrite and verification counters, the retrieved source (`retrieved_context`) and the verifier's feedback. The `add_messages` annotation ensures message history is appended rather than overwritten across nodes.
 
 ### 🔌 API-First Architecture
 The backend is a FastAPI application exposing clean REST endpoints for querying and document upload. The frontend communicates exclusively via HTTP — making the backend independently testable, deployable, and replaceable. All LLM prompts are externalized in a YAML file, completely decoupled from application logic.
@@ -67,13 +67,13 @@ The Streamlit UI talks to FastAPI over REST. **`/rag/query`** loads the session'
 | Node | File | Function | Purpose |
 |---|---|---|---|
 | `query_analysis` | `graph_builder.py` | `query_classifier()` | Classifies query and performs speculative retrieval to determine route |
-| `retriever` | `graph_builder.py` | `retriever_node()` | Builds a fresh ReAct agent at query time and invokes it with the retriever tool |
-| `grade` | `graph_builder.py` | `grade()` | Scores retrieved context for relevance — returns `"yes"` or `"no"` |
+| `retriever` | `graph_builder.py` | `retriever_node()` | Builds a fresh ReAct agent at query time, invokes it with the retriever tool and stores the raw chunks it retrieved in `retrieved_context` |
+| `grade` | `graph_builder.py` | `grade()` | Scores the retrieved chunks (`retrieved_context`) for relevance to the question — returns `"yes"` or `"no"` |
 | `rewrite` | `graph_builder.py` | `rewrite_query()` | Rewrites the query for better vector search, increments rewrite counter |
-| `web_search` | `graph_builder.py` | `web_search()` | Searches the web via Tavily for real-time or niche information |
+| `web_search` | `graph_builder.py` | `web_search()` | Searches the web via Tavily for real-time or niche information and stores the snippets in `retrieved_context` |
 | `general_llm` | `graph_builder.py` | `general_llm()` | Calls the LLM directly for general knowledge and casual conversation |
-| `generate` | `graph_builder.py` | `generate()` | Synthesizes a clean, readable answer from the retrieved or web-search context |
-| `verify` | `graph_builder.py` | `verify_answer_node()` | Checks whether the generated answer is faithful to its supporting context; increments the verification counter |
+| `generate` | `graph_builder.py` | `generate()` | Writes the answer from the question and `retrieved_context` (plus the verifier's feedback on a retry); increments the verification counter |
+| `verify` | `graph_builder.py` | `verify_answer_node()` | Checks whether the answer is faithful to `retrieved_context`; on failure, returns the reason as `verify_feedback` |
 
 
 ### Conditional Edge Functions (`graph_tools.py`)
@@ -90,7 +90,7 @@ The Streamlit UI talks to FastAPI over REST. **`/rag/query`** loads the session'
 
 **`route_after_verify(state)`** — reads `state["verified"]` and `state["verify_count"]`:
 - `verified == True` → `__end__`
-- `verified == False` and `verify_count < 2` → `generate` (regenerate and re-verify)
+- `verified == False` and `verify_count < 2` → `generate` (regenerate from the source with the verifier's feedback, then re-verify)
 - `verified == False` and `verify_count >= 2` → `__end__` (return best available answer)
 
 ---
@@ -138,6 +138,10 @@ adaptive-rag-agenticai/
 │   └── utils/
 │       └── api_client.py               # HTTP client for the FastAPI backend
 │
+├── tests/                              # Graph routing + grounding tests (LLM and Tavily mocked)
+├── scripts/
+│   └── live_check.py                   # Live end-to-end check with real Groq + Tavily
+│
 ├── .env                                # API keys — never commit this
 ├── pyproject.toml / uv.lock
 ├── requirements.txt
@@ -171,6 +175,9 @@ The `grade → rewrite → retriever` loop has no natural exit if retrieval keep
 
 ### Verification Counter as a Second Loop Guard
 Similarly, `verify_count` caps the generate → verify → regenerate loop at 2 attempts. If the answer still isn't verified as faithful after that, the graph returns the best answer produced rather than looping indefinitely.
+
+### One Source of Truth: `retrieved_context`
+The retriever and web-search nodes store the raw source text (FAISS chunks or Tavily snippets) in `retrieved_context`, and `grade`, `generate` and `verify` all read from it rather than from the last message. This keeps every check anchored to the original source: on a retry, `generate` rewrites from the same chunks using the verifier's feedback, instead of rephrasing the answer that was just rejected.
 
 ### Prompts Fully Externalized in YAML
 All LLM prompt templates live in `prompts.yaml` and are loaded via the `Config` class. No prompt text lives in Python files, so prompt changes never require touching application logic and prompts can be versioned independently.
@@ -314,6 +321,19 @@ streamlit run streamlit_app/home.py
 4. The system automatically routes to the best strategy and returns an answer
 5. Click "Start Over" to clear your session and return to the home screen
 
+### Running the Tests
+
+```bash
+pip install pytest
+python -m pytest tests
+```
+The tests replace the LLM and Tavily with fakes, so they need no API keys or network. They cover every route, the rewrite fallback to web search, and that `generate` and `verify` always use the retrieved source.
+
+To run the graph end to end against the real services (needs `GROQ_API_KEY` and `TAVILY_API_KEY` in `.env`):
+```bash
+python scripts/live_check.py
+```
+
 ---
 
 ## 🛠️ Tech Stack
@@ -396,6 +416,7 @@ A: Yes. The `llm` instance in `groq.py` follows the LangChain `BaseChatModel` in
 - ✅ Document upload, chunking, and FAISS indexing
 - ✅ MongoDB persistent chat history + in-memory fallback
 - ✅ All prompts externalized in YAML
+- ✅ Automated tests for routing, fallback and grounded regeneration
 - ⏳ Production deployment hardening (Qdrant migration, auth)
 
 ---
